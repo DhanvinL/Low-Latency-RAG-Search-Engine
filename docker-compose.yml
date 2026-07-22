@@ -1,0 +1,89 @@
+services:
+  api_server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag_api_server
+    ports:
+      - "8000:8000"
+    environment:
+      QDRANT_HOST: qdrant_db
+      QDRANT_PORT: "6333"
+      REDIS_HOST: redis_cache
+      REDIS_PORT: "6379"
+      VLLM_ENDPOINT: "http://vllm:8001/v1"
+      EMBEDDING_DEVICE: "cpu"
+      LOG_LEVEL: "INFO"
+      ENVIRONMENT: "production"
+    depends_on:
+      qdrant_db:
+        condition: service_started
+      redis_cache:
+        condition: service_healthy
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./data:/app/data
+    networks:
+      - rag_net
+    restart: unless-stopped
+
+  qdrant_db:
+    image: qdrant/qdrant:latest
+    container_name: rag_qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    networks:
+      - rag_net
+    restart: unless-stopped
+
+  redis_cache:
+    image: redis:7-alpine
+    container_name: rag_redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - rag_net
+    restart: unless-stopped
+
+  # Optional GPU inference server. Requires the NVIDIA container runtime.
+  # Enable with:  docker compose --profile gpu up
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: rag_vllm
+    profiles: ["gpu"]
+    command:
+      - "--model"
+      - "meta-llama/Meta-Llama-3-8B-Instruct"
+      - "--port"
+      - "8001"
+    ports:
+      - "8001:8001"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - rag_net
+    restart: unless-stopped
+
+networks:
+  rag_net:
+    driver: bridge
+
+volumes:
+  qdrant_storage:
+  redis_data:
